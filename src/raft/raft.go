@@ -425,7 +425,7 @@ func (rf *Raft) startElection(term int) {
 			// Become leader if majority of peers voted for us
 			if votes > len(rf.peers)/2 {
 				rf.becomeLeaderLocked()
-				return
+				go rf.replicationTicker(term)
 			}
 		}
 	}
