@@ -31,6 +31,7 @@ import (
 const (
 	electionTimeoutMin time.Duration = 250 * time.Millisecond
 	electionTimeoutMax time.Duration = 400 * time.Millisecond
+	replicateInterval  time.Duration = 200 * time.Millisecond
 )
 
 func (rf *Raft) resetElectionTimeout() {
@@ -219,7 +220,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	// Check for votedFor
-	if rf.votedFor != -1 {
+	if rf.votedFor != -1 && rf.votedFor != args.CandidateId {
 		LOG(rf.me, rf.currentTerm, DVote, "%d, Can't vote for peer %d, already voted for %d", args.CandidateId, rf.votedFor)
 		return
 	}
@@ -304,6 +305,90 @@ func (rf *Raft) killed() bool {
 
 func (rf *Raft) contextLostLocked(role Role, term int) bool {
 	return rf.role == role && rf.currentTerm == term
+}
+
+type AppendEntriesArgs struct {
+	Term     int
+	LeaderId int
+}
+
+type AppendEntriesReply struct {
+	Term    int
+	Success bool
+}
+
+func (rf *Raft) sendAppendEntries(peer int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[peer].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	reply.Term = rf.currentTerm
+	reply.Success = true
+
+	if args.Term < rf.currentTerm {
+		LOG(rf.me, rf.currentTerm, DLog2, "AppendEntries from %d, lower term: T%d", args.LeaderId, args.Term)
+		return
+	}
+	rf.becomeFollowerLocked(args.Term)
+	rf.resetElectionTimeout()
+}
+
+func (rf *Raft) startReplication(term int) bool {
+	replicateToPeer := func(peer int, args *AppendEntriesArgs) {
+		reply := &AppendEntriesReply{}
+		ok := rf.sendAppendEntries(peer, args, reply)
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+
+		if !ok {
+			LOG(rf.me, rf.currentTerm, DLog, "Can't send AppendEntries to peer %d", peer)
+			return
+		}
+
+		if reply.Term > rf.currentTerm {
+			rf.becomeFollowerLocked(reply.Term)
+			return
+		}
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if rf.contextLostLocked(Leader, term) {
+		LOG(rf.me, rf.currentTerm, DLog, "Lost leader to %s[T%d]", rf.role, rf.currentTerm)
+		return false
+	}
+
+	for peer := 0; peer < len(rf.peers); peer++ {
+		if peer == rf.me {
+			continue
+		}
+
+		args := &AppendEntriesArgs{
+			Term:     rf.currentTerm,
+			LeaderId: rf.me,
+		}
+
+		go replicateToPeer(peer, args)
+	}
+
+	return true
+}
+
+func (rf *Raft) replicationTicker(term int) {
+	for !rf.killed() {
+		ok := rf.startReplication(term)
+
+		if !ok {
+			LOG(rf.me, rf.currentTerm, DDebug, "Can't start replication")
+			break
+		}
+
+		time.Sleep(replicateInterval)
+	}
 }
 
 func (rf *Raft) startElection(term int) {
