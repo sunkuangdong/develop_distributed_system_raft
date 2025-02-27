@@ -209,7 +209,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = false
-
 	if args.Term < rf.currentTerm {
 		LOG(rf.me, rf.currentTerm, DVote, "%d, Can't vote for peer %d, lower term: T%d", args.CandidateId, rf.currentTerm, args.Term)
 		return
@@ -304,7 +303,7 @@ func (rf *Raft) killed() bool {
 }
 
 func (rf *Raft) contextLostLocked(role Role, term int) bool {
-	return rf.role == role && rf.currentTerm == term
+	return !(rf.currentTerm == term && rf.role == role)
 }
 
 type AppendEntriesArgs struct {
@@ -317,33 +316,32 @@ type AppendEntriesReply struct {
 	Success bool
 }
 
-func (rf *Raft) sendAppendEntries(peer int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	ok := rf.peers[peer].Call("Raft.AppendEntries", args, reply)
-	return ok
-}
-
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
-	reply.Term = rf.currentTerm
-	reply.Success = true
 
 	if args.Term < rf.currentTerm {
 		LOG(rf.me, rf.currentTerm, DLog2, "AppendEntries from %d, lower term: T%d", args.LeaderId, args.Term)
 		return
 	}
-	rf.becomeFollowerLocked(args.Term)
+	if args.Term >= rf.currentTerm {
+		rf.becomeFollowerLocked(args.Term)
+	}
 	rf.resetElectionTimeout()
+}
+
+func (rf *Raft) sendAppendEntries(peer int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[peer].Call("Raft.AppendEntries", args, reply)
+	return ok
 }
 
 func (rf *Raft) startReplication(term int) bool {
 	replicateToPeer := func(peer int, args *AppendEntriesArgs) {
 		reply := &AppendEntriesReply{}
 		ok := rf.sendAppendEntries(peer, args, reply)
+
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
-
 		if !ok {
 			LOG(rf.me, rf.currentTerm, DLog, "Can't send AppendEntries to peer %d", peer)
 			return
@@ -357,6 +355,7 @@ func (rf *Raft) startReplication(term int) bool {
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
 	if rf.contextLostLocked(Leader, term) {
 		LOG(rf.me, rf.currentTerm, DLog, "Lost leader to %s[T%d]", rf.role, rf.currentTerm)
 		return false
@@ -381,9 +380,7 @@ func (rf *Raft) startReplication(term int) bool {
 func (rf *Raft) replicationTicker(term int) {
 	for !rf.killed() {
 		ok := rf.startReplication(term)
-
 		if !ok {
-			LOG(rf.me, rf.currentTerm, DDebug, "Can't start replication")
 			break
 		}
 
@@ -434,7 +431,7 @@ func (rf *Raft) startElection(term int) {
 	defer rf.mu.Unlock()
 
 	// Context lost if we are follower and peer has a higher term
-	if rf.contextLostLocked(Follower, term) {
+	if rf.contextLostLocked(Candidate, term) {
 		LOG(rf.me, rf.currentTerm, DVote, "Context lost, can't start election")
 		return
 	}
@@ -451,8 +448,6 @@ func (rf *Raft) startElection(term int) {
 		}
 		go askVoteFromPeer(peer, args)
 	}
-
-	rf.becomeCandidateLocked()
 }
 
 func (rf *Raft) electionTicker() {
