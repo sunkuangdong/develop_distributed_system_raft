@@ -15,12 +15,27 @@ func (rf *Raft) isElectionTimeoutLocked() bool {
 	return time.Since(rf.electionStart) > rf.electionTimeout
 }
 
+func (rf *Raft) isMoreUpToDate(candidateIndex int, candidateTerm int) bool {
+	l := len(rf.log)
+	lastIndex, lastTerm := l-1, rf.log[l-1].Term
+
+	LOG(rf.me, rf.currentTerm, DLog, "isMoreUpToDate: %d, %d", candidateIndex, candidateTerm)
+	if lastTerm != candidateTerm {
+		return lastTerm > candidateTerm
+	}
+
+	return lastIndex > candidateIndex
+}
+
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (PartA).
 	Term        int
 	VoteGranted bool
+
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 // example RequestVote RPC handler.
@@ -43,6 +58,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Check for votedFor
 	if rf.votedFor != -1 && rf.votedFor != args.CandidateId {
 		LOG(rf.me, rf.currentTerm, DVote, "%d, Can't vote for peer %d, already voted for %d", args.CandidateId, rf.votedFor)
+		return
+	}
+
+	if rf.isMoreUpToDate(args.LastLogIndex, args.LastLogTerm) {
+		LOG(rf.me, rf.currentTerm, DVote, "%d, Can't vote for peer %d, candidate is more up to date", args.CandidateId)
 		return
 	}
 
@@ -86,7 +106,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 func (rf *Raft) startElection(term int) {
 	votes := 0
-
 	askVoteFromPeer := func(peer int, args *RequestVoteArgs) {
 		reply := &RequestVoteReply{}
 		ok := rf.sendRequestVote(peer, args, reply)
@@ -132,6 +151,8 @@ func (rf *Raft) startElection(term int) {
 		return
 	}
 
+	l := len(rf.log)
+
 	for peer := 0; peer < len(rf.peers); peer++ {
 		if peer == rf.me {
 			votes++
@@ -139,8 +160,10 @@ func (rf *Raft) startElection(term int) {
 		}
 
 		args := &RequestVoteArgs{
-			Term:        rf.currentTerm,
-			CandidateId: rf.me,
+			Term:         rf.currentTerm,
+			CandidateId:  rf.me,
+			LastLogIndex: l - 1,
+			LastLogTerm:  rf.log[l-1].Term,
 		}
 		go askVoteFromPeer(peer, args)
 	}
