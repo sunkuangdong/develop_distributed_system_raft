@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"sort"
 	"time"
 )
 
@@ -20,6 +21,8 @@ type AppendEntriesArgs struct {
 
 	// log entries to append
 	Entries []LogEntry
+
+	LeaderCommit int
 }
 
 type AppendEntriesReply struct {
@@ -59,6 +62,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	LOG(rf.me, rf.currentTerm, DLog2, "AppendEntries from %d, success: %d", args.LeaderId, args.PrevLogIndex)
 
 	// TODO: update nextIndex and matchIndex
+	if args.LeaderCommit > rf.commitIndex {
+		LOG(rf.me, rf.currentTerm, DLog2, "Update commitIndex to %d->%d", rf.commitIndex, args.LeaderCommit)
+		rf.commitIndex = args.LeaderCommit
+		rf.applyCond.Signal()
+	}
 
 	rf.resetElectionTimeout()
 }
@@ -66,6 +74,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 func (rf *Raft) sendAppendEntries(peer int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[peer].Call("Raft.AppendEntries", args, reply)
 	return ok
+}
+
+func (rf *Raft) getMajorityIndexLocked() int {
+	tmpIndexes := make([]int, len(rf.matchIndex))
+	copy(tmpIndexes, rf.matchIndex)
+	sort.Ints(sort.IntSlice(tmpIndexes))
+	majorityIdx := (len(rf.peers) - 1) / 2
+
+	LOG(rf.me, rf.currentTerm, DDebug, "Majority index: %v, majority[%d]=%d", tmpIndexes, majorityIdx, tmpIndexes[majorityIdx])
+	return tmpIndexes[majorityIdx]
 }
 
 func (rf *Raft) startReplication(term int) bool {
@@ -100,6 +118,12 @@ func (rf *Raft) startReplication(term int) bool {
 		rf.nextIndex[peer] = rf.matchIndex[peer] + 1
 
 		// TODO: update commitIndex
+		majorityMatched := rf.getMajorityIndexLocked()
+		if majorityMatched > rf.commitIndex {
+			LOG(rf.me, rf.currentTerm, DLog2, "Leader commitIndex to %d->%d", rf.commitIndex, majorityMatched)
+			rf.commitIndex = majorityMatched
+			rf.applyCond.Signal()
+		}
 	}
 
 	rf.mu.Lock()
@@ -123,6 +147,7 @@ func (rf *Raft) startReplication(term int) bool {
 			PrevLogIndex: rf.nextIndex[peer] - 1,
 			PrevLogTerm:  rf.log[rf.nextIndex[peer]-1].Term,
 			Entries:      rf.log[rf.nextIndex[peer]:],
+			LeaderCommit: rf.commitIndex,
 		}
 
 		go replicateToPeer(peer, args)
