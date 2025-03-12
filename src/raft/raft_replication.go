@@ -46,7 +46,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	// return failure if prevlog not match
-	if args.PrevLogIndex > len(rf.log) {
+	if args.PrevLogIndex >= len(rf.log) {
 		LOG(rf.me, rf.currentTerm, DLog2, "AppendEntries from %d, prevlog not match: %d", args.LeaderId, args.PrevLogIndex)
 		return
 	}
@@ -77,7 +77,7 @@ func (rf *Raft) sendAppendEntries(peer int, args *AppendEntriesArgs, reply *Appe
 }
 
 func (rf *Raft) getMajorityIndexLocked() int {
-	tmpIndexes := make([]int, len(rf.matchIndex))
+	tmpIndexes := make([]int, len(rf.peers))
 	copy(tmpIndexes, rf.matchIndex)
 	sort.Ints(sort.IntSlice(tmpIndexes))
 	majorityIdx := (len(rf.peers) - 1) / 2
@@ -103,6 +103,11 @@ func (rf *Raft) startReplication(term int) bool {
 			return
 		}
 
+		if rf.contextLostLocked(Leader, term) {
+			LOG(rf.me, rf.currentTerm, DLog, "->%d: Lost leader to T%d: leader->T%d:%d", peer, term, rf.currentTerm, rf.role)
+			return
+		}
+
 		if !reply.Success {
 			idx, term := args.PrevLogIndex, args.PrevLogTerm
 			for idx > 0 && rf.log[idx-1].Term == term {
@@ -110,7 +115,7 @@ func (rf *Raft) startReplication(term int) bool {
 			}
 
 			rf.nextIndex[peer] = idx + 1
-			LOG(rf.me, rf.currentTerm, DLog, "AppendEntries to %d, failed: %d", peer, idx+1)
+			LOG(rf.me, rf.currentTerm, DLog, "->%d: AppendEntries to %d, failed: %d", peer, args.PrevLogIndex, rf.nextIndex[peer])
 			return
 		}
 
@@ -141,12 +146,15 @@ func (rf *Raft) startReplication(term int) bool {
 			continue
 		}
 
+		prevIdx := rf.nextIndex[peer] - 1
+		prevTerm := rf.log[prevIdx].Term
+
 		args := &AppendEntriesArgs{
 			Term:         rf.currentTerm,
 			LeaderId:     rf.me,
-			PrevLogIndex: rf.nextIndex[peer] - 1,
-			PrevLogTerm:  rf.log[rf.nextIndex[peer]-1].Term,
-			Entries:      rf.log[rf.nextIndex[peer]:],
+			PrevLogIndex: prevIdx,
+			PrevLogTerm:  prevTerm,
+			Entries:      rf.log[prevIdx+1:],
 			LeaderCommit: rf.commitIndex,
 		}
 
