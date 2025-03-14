@@ -110,7 +110,7 @@ func (rf *Raft) startReplication(term int) bool {
 
 		if !reply.Success {
 			idx, term := args.PrevLogIndex, args.PrevLogTerm
-			for idx > 0 && rf.log[idx-1].Term == term {
+			for idx > 0 && rf.log[idx].Term == term {
 				idx--
 			}
 
