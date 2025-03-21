@@ -27,8 +27,9 @@ type AppendEntriesArgs struct {
 }
 
 func (args *AppendEntriesArgs) String() string {
-	return fmt.Sprintf("Leader-%d, T%d, Prev=[%d]T%d, (%d, %d], CommitIdx=[%d]",
-		args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm, args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.LeaderCommit)
+	return fmt.Sprintf("Leader-%d, T%d, Prev:[%d]T%d, (%d, %d], CommitIdx: %d",
+		args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm,
+		args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.LeaderCommit)
 }
 
 type AppendEntriesReply struct {
@@ -40,20 +41,19 @@ type AppendEntriesReply struct {
 }
 
 func (reply *AppendEntriesReply) String() string {
-	return fmt.Sprintf("T%d, Success=%v, ConfilictTerm=[%d]T%d",
-		reply.Term, reply.Success, reply.ConfilictTerm, reply.ConfilictIndex)
+	return fmt.Sprintf("T%d, Sucess: %v, ConflictTerm: [%d]T%d", reply.Term, reply.Success, reply.ConfilictIndex, reply.ConfilictTerm)
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	LOG(rf.me, rf.currentTerm, DDebug, "<-S%d, Append, Args: %v", args.LeaderId, args.String())
+	LOG(rf.me, rf.currentTerm, DDebug, "<- S%d, Appended, Args=%v", args.LeaderId, args.String())
 
 	reply.Term = rf.currentTerm
 	reply.Success = false
 
 	if args.Term < rf.currentTerm {
-		LOG(rf.me, rf.currentTerm, DLog2, "AppendEntries from %d, lower term: T%d", args.LeaderId, args.Term)
+		LOG(rf.me, rf.currentTerm, DLog2, "<- S%d, Reject log, Higher term, T%d<T%d", args.LeaderId, args.Term, rf.currentTerm)
 		return
 	}
 	if args.Term >= rf.currentTerm {
@@ -63,8 +63,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	defer func() {
 		rf.resetElectionTimeout()
 		if !reply.Success {
-			LOG(rf.me, rf.currentTerm, DLog2, "<-S%d, Follwer Conflict: [%d]T%d", args.LeaderId, reply.ConfilictIndex, reply.ConfilictTerm)
-			LOG(rf.me, rf.currentTerm, DDebug, "<-S%d, Follower log: %v", args.LeaderId, rf.logString())
+			LOG(rf.me, rf.currentTerm, DLog2, "<- S%d, Follower Conflict: [%d]T%d", args.LeaderId, reply.ConfilictIndex, reply.ConfilictTerm)
+			LOG(rf.me, rf.currentTerm, DDebug, "<- S%d, Follower Log=%v", args.LeaderId, rf.logString())
 		}
 	}()
 
@@ -72,14 +72,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.PrevLogIndex >= len(rf.log) {
 		reply.ConfilictIndex = len(rf.log)
 		reply.ConfilictTerm = InvalidTerm
-		LOG(rf.me, rf.currentTerm, DLog2, "AppendEntries from %d, prevlog not match: %d", args.LeaderId, args.PrevLogIndex)
+		LOG(rf.me, rf.currentTerm, DLog2, "<- S%d, Reject log, Follower log too short, Len:%d < Prev:%d", args.LeaderId, len(rf.log), args.PrevLogIndex)
 		return
 	}
 
 	if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
-		reply.ConfilictIndex = args.PrevLogIndex
-		reply.ConfilictTerm = rf.firstLogFor(reply.ConfilictTerm)
-		LOG(rf.me, rf.currentTerm, DLog2, "AppendEntries from %d, prevlog not match: %d", args.LeaderId, args.PrevLogIndex)
+		reply.ConfilictTerm = rf.log[args.PrevLogIndex].Term
+		reply.ConfilictIndex = rf.firstLogFor(reply.ConfilictTerm)
+		LOG(rf.me, rf.currentTerm, DLog2, "<- S%d, Reject log, Prev log not match, [%d]: T%d != T%d", args.LeaderId, args.PrevLogIndex, rf.log[args.PrevLogIndex].Term, args.PrevLogTerm)
 		return
 	}
 

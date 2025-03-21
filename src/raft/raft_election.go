@@ -20,7 +20,7 @@ func (rf *Raft) isMoreUpToDate(candidateIndex int, candidateTerm int) bool {
 	l := len(rf.log)
 	lastIndex, lastTerm := l-1, rf.log[l-1].Term
 
-	LOG(rf.me, rf.currentTerm, DLog, "isMoreUpToDate: %d, %d", candidateIndex, candidateTerm)
+	LOG(rf.me, rf.currentTerm, DVote, "Compare last log, Me: [%d]T%d, Candidate: [%d]T%d", lastIndex, lastTerm, candidateIndex, candidateTerm)
 	if lastTerm != candidateTerm {
 		return lastTerm > candidateTerm
 	}
@@ -34,17 +34,24 @@ type RequestVoteReply struct {
 	// Your data here (PartA).
 	Term        int
 	VoteGranted bool
+}
 
+// example RequestVote RPC arguments structure.
+// field names must start with capital letters!
+type RequestVoteArgs struct {
+	// Your data here (PartA, PartB).
+	Term         int
+	CandidateId  int
 	LastLogIndex int
 	LastLogTerm  int
 }
 
 func (args *RequestVoteArgs) String() string {
-	return fmt.Sprintf("Candidate-%d, T%d, Last=[%d]T%d", args.CandidateId, args.Term, args.LastLogIndex, args.LastLogTerm)
+	return fmt.Sprintf("Candidate-%d, T%d, Last: [%d]T%d", args.CandidateId, args.Term, args.LastLogIndex, args.LastLogTerm)
 }
 
 func (reply *RequestVoteReply) String() string {
-	return fmt.Sprintf("T%d, VoteGranted=%v", reply.Term, reply.VoteGranted)
+	return fmt.Sprintf("T%d, VoteGranted: %v", reply.Term, reply.VoteGranted)
 }
 
 // example RequestVote RPC handler.
@@ -52,12 +59,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (PartA, PartB).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	LOG(rf.me, rf.currentTerm, DVote, "->S%d, VoteAsked, %v", args.CandidateId, args.String())
+	LOG(rf.me, rf.currentTerm, DDebug, "<- S%d, VoteAsked, Args=%v", args.CandidateId, args.String())
 
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = false
 	if args.Term < rf.currentTerm {
-		LOG(rf.me, rf.currentTerm, DVote, "%d, Can't vote for peer %d, lower term: T%d", args.CandidateId, rf.currentTerm, args.Term)
+		LOG(rf.me, rf.currentTerm, DVote, "<- S%d, Reject voted, Higher term, T%d>T%d", args.CandidateId, rf.currentTerm, args.Term)
 		return
 	}
 
@@ -67,12 +74,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	// Check for votedFor
 	if rf.votedFor != -1 && rf.votedFor != args.CandidateId {
-		LOG(rf.me, rf.currentTerm, DVote, "%d, Can't vote for peer %d, already voted for %d", args.CandidateId, rf.votedFor)
+		LOG(rf.me, rf.currentTerm, DVote, "<- S%d, Reject voted, Already voted to S%d", args.CandidateId, rf.votedFor)
 		return
 	}
 
 	if rf.isMoreUpToDate(args.LastLogIndex, args.LastLogTerm) {
-		LOG(rf.me, rf.currentTerm, DVote, "%d, Can't vote for peer %d, candidate is more up to date", args.CandidateId)
+		LOG(rf.me, rf.currentTerm, DVote, "<- S%d, Reject voted, Candidate less up-to-date", args.CandidateId)
 		return
 	}
 
@@ -80,7 +87,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.votedFor = args.CandidateId
 	rf.persistLocked()
 	rf.resetElectionTimeout()
-	LOG(rf.me, rf.currentTerm, DVote, "%d, Voted for peer %d", args.CandidateId, args.CandidateId)
+	LOG(rf.me, rf.currentTerm, DVote, "<- S%d, Vote granted", args.CandidateId)
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -125,11 +132,10 @@ func (rf *Raft) startElection(term int) {
 		defer rf.mu.Unlock()
 
 		if !ok {
-			LOG(rf.me, rf.currentTerm, DDebug, "Can't send RequestVote to peer %d", peer)
+			LOG(rf.me, rf.currentTerm, DDebug, "-> S%d, Ask vote, Lost or error", peer)
 			return
 		}
-
-		LOG(rf.me, rf.currentTerm, DDebug, "<-S%d, AskVote Reply, %v", peer, reply.String())
+		LOG(rf.me, rf.currentTerm, DDebug, "-> S%d, AskVote Reply=%v", peer, reply.String())
 
 		// Become follower if peer has a higher term
 		if reply.Term > rf.currentTerm {
@@ -139,14 +145,13 @@ func (rf *Raft) startElection(term int) {
 
 		// Context lost if we are candidate and peer has a higher term
 		if rf.contextLostLocked(Candidate, term) {
-			LOG(rf.me, rf.currentTerm, DVote, "Context lost, can't vote for peer %d", peer)
+			LOG(rf.me, rf.currentTerm, DVote, "-> S%d, Lost context, abort RequestVoteReply", peer)
 			return
 		}
 
 		// Vote for peer if they have a higher term
 		if reply.VoteGranted {
 			votes++
-
 			// Become leader if majority of peers voted for us
 			if votes > len(rf.peers)/2 {
 				rf.becomeLeaderLocked()
@@ -157,15 +162,13 @@ func (rf *Raft) startElection(term int) {
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
 	// Context lost if we are follower and peer has a higher term
 	if rf.contextLostLocked(Candidate, term) {
-		LOG(rf.me, rf.currentTerm, DVote, "Context lost, can't start election")
+		LOG(rf.me, rf.currentTerm, DVote, "Lost Candidate[T%d] to %s[T%d], abort RequestVote", rf.role, term, rf.currentTerm)
 		return
 	}
 
 	l := len(rf.log)
-
 	for peer := 0; peer < len(rf.peers); peer++ {
 		if peer == rf.me {
 			votes++
@@ -178,7 +181,7 @@ func (rf *Raft) startElection(term int) {
 			LastLogIndex: l - 1,
 			LastLogTerm:  rf.log[l-1].Term,
 		}
-		LOG(rf.me, rf.currentTerm, DVote, "->S%d, AskVote, Args: %v", peer, args.String())
+		LOG(rf.me, rf.currentTerm, DDebug, "-> S%d, AskVote, Args=%v", peer, args.String())
 		go askVoteFromPeer(peer, args)
 	}
 }

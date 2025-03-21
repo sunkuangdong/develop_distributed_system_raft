@@ -107,7 +107,7 @@ func (rf *Raft) becomeFollowerLocked(term int) {
 		return
 	}
 
-	LOG(rf.me, rf.currentTerm, DLog, "%s->Follower, For T%s->T%s", rf.role, rf.currentTerm, term)
+	LOG(rf.me, rf.currentTerm, DLog, "%s->Follower, For T%v->T%v", rf.role, rf.currentTerm, term)
 	rf.role = Follower
 	shouldPersist := rf.currentTerm != term
 	if term > rf.currentTerm {
@@ -134,11 +134,11 @@ func (rf *Raft) becomeCandidateLocked() {
 
 func (rf *Raft) becomeLeaderLocked() {
 	if rf.role != Candidate {
-		LOG(rf.me, rf.currentTerm, DError, "Can't become Leader, not Candidate")
+		LOG(rf.me, rf.currentTerm, DError, "Only Candidate can become Leader")
 		return
 	}
 
-	LOG(rf.me, rf.currentTerm, DLeader, "Become Leader, For T%d", rf.role, rf.currentTerm)
+	LOG(rf.me, rf.currentTerm, DLeader, "Become Leader in T%d", rf.currentTerm)
 	rf.role = Leader
 
 	for peer := 0; peer < len(rf.peers); peer++ {
@@ -160,16 +160,16 @@ func (rf *Raft) firstLogFor(term int) int {
 
 func (rf *Raft) logString() string {
 	var terms string
-	prevStart := 0
 	prevTerm := rf.log[0].Term
+	prevStart := 0
 	for i := 0; i < len(rf.log); i++ {
 		if rf.log[i].Term != prevTerm {
-			terms += fmt.Sprintf("[%d, %d]-%d ", prevStart, i-1, prevTerm)
-			prevStart = i
+			terms += fmt.Sprintf(" [%d, %d]T%d", prevStart, i-1, prevTerm)
 			prevTerm = rf.log[i].Term
+			prevStart = i
 		}
 	}
-	terms += fmt.Sprintf("[%d, %d]-%d ", prevStart, len(rf.log)-1, prevTerm)
+	terms += fmt.Sprintf("[%d, %d]T%d", prevStart, len(rf.log)-1, prevTerm)
 	return terms
 }
 
@@ -178,7 +178,6 @@ func (rf *Raft) logString() string {
 func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
 	return rf.currentTerm, rf.role == Leader
 }
 
@@ -189,16 +188,6 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (PartD).
 
-}
-
-// example RequestVote RPC arguments structure.
-// field names must start with capital letters!
-type RequestVoteArgs struct {
-	// Your data here (PartA, PartB).
-	Term         int
-	CandidateId  int
-	LastLogIndex int
-	LastLogTerm  int
 }
 
 // the service using Raft (e.g. a k/v server) wants to start
