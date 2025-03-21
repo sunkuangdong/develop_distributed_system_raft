@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"fmt"
 	"sort"
 	"time"
 )
@@ -25,6 +26,11 @@ type AppendEntriesArgs struct {
 	LeaderCommit int
 }
 
+func (args *AppendEntriesArgs) String() string {
+	return fmt.Sprintf("Leader-%d, T%d, Prev=[%d]T%d, (%d, %d], CommitIdx=[%d]",
+		args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm, args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.LeaderCommit)
+}
+
 type AppendEntriesReply struct {
 	Term    int
 	Success bool
@@ -33,9 +39,15 @@ type AppendEntriesReply struct {
 	ConfilictTerm  int
 }
 
+func (reply *AppendEntriesReply) String() string {
+	return fmt.Sprintf("T%d, Success=%v, ConfilictTerm=[%d]T%d",
+		reply.Term, reply.Success, reply.ConfilictTerm, reply.ConfilictIndex)
+}
+
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	LOG(rf.me, rf.currentTerm, DDebug, "<-S%d, Append, Args: %v", args.LeaderId, args.String())
 
 	reply.Term = rf.currentTerm
 	reply.Success = false
@@ -48,7 +60,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.becomeFollowerLocked(args.Term)
 	}
 
-	defer rf.resetElectionTimeout()
+	defer func() {
+		rf.resetElectionTimeout()
+		if !reply.Success {
+			LOG(rf.me, rf.currentTerm, DLog2, "<-S%d, Follwer Conflict: [%d]T%d", args.LeaderId, reply.ConfilictIndex, reply.ConfilictTerm)
+			LOG(rf.me, rf.currentTerm, DDebug, "<-S%d, Follower log: %v", args.LeaderId, rf.logString())
+		}
+	}()
 
 	// return failure if prevlog not match
 	if args.PrevLogIndex >= len(rf.log) {
@@ -107,6 +125,8 @@ func (rf *Raft) startReplication(term int) bool {
 			return
 		}
 
+		LOG(rf.me, rf.currentTerm, DDebug, "<-S%d, Append, Reply: %v", peer, reply.String())
+
 		if reply.Term > rf.currentTerm {
 			rf.becomeFollowerLocked(reply.Term)
 			return
@@ -134,7 +154,9 @@ func (rf *Raft) startReplication(term int) bool {
 				rf.nextIndex[peer] = prevIndex
 			}
 
-			LOG(rf.me, rf.currentTerm, DLog, "->%d: AppendEntries to %d, failed: %d", peer, args.PrevLogIndex, rf.nextIndex[peer])
+			LOG(rf.me, rf.currentTerm, DLog, "->%d: Not matched at Prev=[%d]T%d, Try next Prev=[%d]T%d",
+				peer, args.PrevLogIndex, args.PrevLogTerm, rf.nextIndex[peer]-1, rf.log[rf.nextIndex[peer]-1])
+			LOG(rf.me, rf.currentTerm, DDebug, "->%d, Leader log: %v", peer, rf.logString())
 			return
 		}
 
@@ -143,7 +165,7 @@ func (rf *Raft) startReplication(term int) bool {
 
 		// TODO: update commitIndex
 		majorityMatched := rf.getMajorityIndexLocked()
-		if majorityMatched > rf.commitIndex {
+		if majorityMatched > rf.commitIndex && rf.log[majorityMatched].Term == rf.currentTerm {
 			LOG(rf.me, rf.currentTerm, DLog2, "Leader commitIndex to %d->%d", rf.commitIndex, majorityMatched)
 			rf.commitIndex = majorityMatched
 			rf.applyCond.Signal()
@@ -176,7 +198,7 @@ func (rf *Raft) startReplication(term int) bool {
 			Entries:      rf.log[prevIdx+1:],
 			LeaderCommit: rf.commitIndex,
 		}
-
+		LOG(rf.me, rf.currentTerm, DDebug, "->S%d, Append, Args: %v", peer, args.String())
 		go replicateToPeer(peer, args)
 	}
 

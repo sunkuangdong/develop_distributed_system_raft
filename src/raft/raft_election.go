@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"fmt"
 	"math/rand"
 	"time"
 )
@@ -38,11 +39,20 @@ type RequestVoteReply struct {
 	LastLogTerm  int
 }
 
+func (args *RequestVoteArgs) String() string {
+	return fmt.Sprintf("Candidate-%d, T%d, Last=[%d]T%d", args.CandidateId, args.Term, args.LastLogIndex, args.LastLogTerm)
+}
+
+func (reply *RequestVoteReply) String() string {
+	return fmt.Sprintf("T%d, VoteGranted=%v", reply.Term, reply.VoteGranted)
+}
+
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (PartA, PartB).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	LOG(rf.me, rf.currentTerm, DVote, "->S%d, VoteAsked, %v", args.CandidateId, args.String())
 
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = false
@@ -119,6 +129,8 @@ func (rf *Raft) startElection(term int) {
 			return
 		}
 
+		LOG(rf.me, rf.currentTerm, DDebug, "<-S%d, AskVote Reply, %v", peer, reply.String())
+
 		// Become follower if peer has a higher term
 		if reply.Term > rf.currentTerm {
 			rf.becomeFollowerLocked(reply.Term)
@@ -166,6 +178,7 @@ func (rf *Raft) startElection(term int) {
 			LastLogIndex: l - 1,
 			LastLogTerm:  rf.log[l-1].Term,
 		}
+		LOG(rf.me, rf.currentTerm, DVote, "->S%d, AskVote, Args: %v", peer, args.String())
 		go askVoteFromPeer(peer, args)
 	}
 }

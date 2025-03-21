@@ -20,6 +20,7 @@ package raft
 import (
 	//	"bytes"
 
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -155,6 +156,21 @@ func (rf *Raft) firstLogFor(term int) int {
 		}
 	}
 	return InvalidIndex
+}
+
+func (rf *Raft) logString() string {
+	var terms string
+	prevStart := 0
+	prevTerm := rf.log[0].Term
+	for i := 0; i < len(rf.log); i++ {
+		if rf.log[i].Term != prevTerm {
+			terms += fmt.Sprintf("[%d, %d]-%d ", prevStart, i-1, prevTerm)
+			prevStart = i
+			prevTerm = rf.log[i].Term
+		}
+	}
+	terms += fmt.Sprintf("[%d, %d]-%d ", prevStart, len(rf.log)-1, prevTerm)
+	return terms
 }
 
 // return currentTerm and whether this server
