@@ -7,7 +7,7 @@ import (
 )
 
 func (rf *Raft) persistString() string {
-	return fmt.Sprintf("currentTerm: %d, votedFor: %d, log: [0: %d)", rf.currentTerm, rf.votedFor, len(rf.log))
+	return fmt.Sprintf("currentTerm: %d, votedFor: %d, log: [0: %d)", rf.currentTerm, rf.votedFor, rf.log.size())
 }
 
 // save Raft's persistent state to stable storage,
@@ -31,7 +31,7 @@ func (rf *Raft) persistLocked() {
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
-	e.Encode(rf.log)
+	rf.log.persist(e)
 	raftstate := w.Bytes()
 	rf.persister.Save(raftstate, nil)
 	LOG(rf.me, rf.currentTerm, DPersist, "Save to persistent: %v", rf.persistString())
@@ -40,7 +40,6 @@ func (rf *Raft) persistLocked() {
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
-		LOG(rf.me, rf.currentTerm, DPersist, "Read from persistent: %v", rf.persistString())
 		return
 	}
 	// Your code here (PartC).
@@ -59,7 +58,6 @@ func (rf *Raft) readPersist(data []byte) {
 
 	var currentTerm int
 	var votedFor int
-	var log []LogEntry
 
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
@@ -75,10 +73,9 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	rf.votedFor = votedFor
 
-	if err := d.Decode(&log); err != nil {
+	if err := rf.log.readPersist(d); err != nil {
 		LOG(rf.me, rf.currentTerm, DPersist, "Read log error: %v", err)
 		return
 	}
-	rf.log = log
 	LOG(rf.me, rf.currentTerm, DPersist, "Read from disk: %v", rf.persistString())
 }
