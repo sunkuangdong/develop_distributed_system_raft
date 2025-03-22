@@ -188,6 +188,18 @@ func (rf *Raft) startReplication(term int) bool {
 		}
 
 		prevIdx := rf.nextIndex[peer] - 1
+		if prevIdx < rf.log.sanpLastIdx {
+			args := &InstallSnapshotArgs{
+				Term:              rf.currentTerm,
+				LeaderId:          rf.me,
+				LastIncludedIndex: rf.log.sanpLastIdx,
+				LastIncludedTerm:  rf.log.sanpLastTerm,
+				Snapshot:          rf.log.snapshot,
+			}
+			LOG(rf.me, rf.currentTerm, DDebug, "->S%d, SendSnapshot, Args: %v", peer, args.String())
+			go rf.InstallToPeer(peer, term, args)
+			continue
+		}
 		prevTerm := rf.log.at(prevIdx).Term
 
 		args := &AppendEntriesArgs{
@@ -214,4 +226,18 @@ func (rf *Raft) replicationTicker(term int) {
 
 		time.Sleep(replicateInterval)
 	}
+}
+
+func (rl *RaftLog) doSnapshot(index int, snapshot []byte) {
+	idx := rl.idx(index)
+	rl.sanpLastIdx = index
+	rl.sanpLastTerm = rl.tailLog[idx].Term
+	rl.snapshot = snapshot
+
+	newLog := make([]LogEntry, 0, rl.size()-rl.sanpLastIdx)
+	newLog = append(newLog, LogEntry{
+		Term: rl.sanpLastTerm,
+	})
+	newLog = append(newLog, rl.tailLog[idx+1:]...)
+	rl.tailLog = newLog
 }

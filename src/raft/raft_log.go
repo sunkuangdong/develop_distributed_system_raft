@@ -124,16 +124,14 @@ func (rl *RaftLog) String() string {
 	return terms
 }
 
-func (rl *RaftLog) doSnapshot(index int, snapshot []byte) {
-	idx := rl.idx(index)
-	rl.sanpLastIdx = index
-	rl.sanpLastTerm = rl.tailLog[idx].Term
+func (rl *RaftLog) InstallSnapshot(lastIncludedIndex int, lastIncludedTerm int, snapshot []byte) {
+	rl.sanpLastIdx = lastIncludedIndex
+	rl.sanpLastTerm = lastIncludedTerm
 	rl.snapshot = snapshot
 
 	newLog := make([]LogEntry, 0, rl.size()-rl.sanpLastIdx)
 	newLog = append(newLog, LogEntry{
 		Term: rl.sanpLastTerm,
 	})
-	newLog = append(newLog, rl.tailLog[idx+1:]...)
 	rl.tailLog = newLog
 }
