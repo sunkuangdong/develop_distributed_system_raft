@@ -28,16 +28,13 @@ type KVServer struct {
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
-	// 调用 raft，将请求存储到 raft 日志中并进行同步
 	index, _, isLeader := kv.rf.Start(Op{Key: args.Key, OpType: OpGet})
 
-	// 如果不是 Leader 的话，直接返回错误
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		return
 	}
 
-	// 等待结果
 	kv.mu.Lock()
 	notifyCh := kv.getNotifyChannel(index)
 	kv.mu.Unlock()
@@ -64,18 +61,14 @@ func (kv *KVServer) requestDuplicated(clientId, seqId int64) bool {
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
-	// 判断请求是否重复
 	kv.mu.Lock()
 	if kv.requestDuplicated(args.ClientId, args.SeqId) {
-		// 如果是重复请求，直接返回结果
 		opReply := kv.duplicateTable[args.ClientId].Reply
 		reply.Err = opReply.Err
 		kv.mu.Unlock()
 		return
 	}
 	kv.mu.Unlock()
-
-	// 调用 raft，将请求存储到 raft 日志中并进行同步
 	index, _, isLeader := kv.rf.Start(Op{
 		Key:      args.Key,
 		Value:    args.Value,
@@ -84,13 +77,11 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		SeqId:    args.SeqId,
 	})
 
-	// 如果不是 Leader 的话，直接返回错误
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		return
 	}
 
-	// 等待结果
 	kv.mu.Lock()
 	notifyCh := kv.getNotifyChannel(index)
 	kv.mu.Unlock()
@@ -102,7 +93,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = ErrTimeout
 	}
 
-	// 删除通知的 channel
 	go func() {
 		kv.mu.Lock()
 		kv.removeNotifyChannel(index)
@@ -176,14 +166,12 @@ func (kv *KVServer) applyTask() {
 		case message := <-kv.applyCh:
 			if message.CommandValid {
 				kv.mu.Lock()
-				// 如果是已经处理过的消息则直接忽略
 				if message.CommandIndex <= kv.lastApplied {
 					kv.mu.Unlock()
 					continue
 				}
 				kv.lastApplied = message.CommandIndex
 
-				// 取出用户的操作信息
 				op := message.Command.(Op)
 				var opReply *OpReply
 				if op.OpType != OpGet && kv.requestDuplicated(op.ClientId, op.SeqId) {
@@ -199,13 +187,11 @@ func (kv *KVServer) applyTask() {
 					}
 				}
 
-				// 将结果发送回去
 				if _, isLeader := kv.rf.GetState(); isLeader {
 					notifyCh := kv.getNotifyChannel(message.CommandIndex)
 					notifyCh <- opReply
 				}
 
-				// 判断是否需要 snapshot
 				if kv.maxraftstate != -1 && kv.rf.GetRaftStateSize() >= kv.maxraftstate {
 					kv.makeSnapshot(message.CommandIndex)
 				}
